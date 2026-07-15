@@ -1,0 +1,603 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Sugari Secure Map</title>
+
+  <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css">
+
+  <style>
+    html, body, #map {
+      height: 100%;
+      margin: 0;
+      padding: 0;
+    }
+
+    #map {
+      width: 100%;
+      display: none;
+    }
+
+    #login {
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: #f4f4f4;
+      font-family: sans-serif;
+    }
+
+    .login-card {
+      background: white;
+      padding: 24px;
+      border-radius: 10px;
+      box-shadow: 0 0 12px rgba(0,0,0,0.2);
+      width: 320px;
+    }
+
+    .login-card h1 {
+      font-size: 20px;
+      margin: 0 0 12px;
+    }
+
+    .login-card input {
+      width: 100%;
+      padding: 10px;
+      font-size: 16px;
+      box-sizing: border-box;
+      margin-top: 8px;
+    }
+
+    .login-card button {
+      width: 100%;
+      padding: 10px;
+      margin-top: 12px;
+      font-size: 16px;
+      cursor: pointer;
+    }
+
+    #loginMessage {
+      color: red;
+      margin-top: 10px;
+      font-size: 13px;
+    }
+
+    .legend {
+      background: white;
+      padding: 10px 12px;
+      line-height: 22px;
+      color: #333;
+      border-radius: 6px;
+      box-shadow: 0 0 8px rgba(0,0,0,0.3);
+      font-size: 13px;
+      max-height: 70vh;
+      overflow-y: auto;
+    }
+
+    .legend-title {
+      font-weight: bold;
+      margin-bottom: 6px;
+      font-size: 14px;
+    }
+
+    .legend-color {
+      display: inline-block;
+      width: 16px;
+      height: 16px;
+      margin-right: 6px;
+      border: 1px solid #555;
+      vertical-align: middle;
+    }
+
+    .leaflet-popup-content {
+      width: 280px !important;
+      max-width: 280px !important;
+    }
+
+    .popup-title {
+      font-weight: bold;
+      font-size: 15px;
+      margin-bottom: 6px;
+    }
+
+    .popup-table {
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+
+    .popup-table th {
+      text-align: left;
+      padding: 3px 8px 3px 0;
+      white-space: nowrap;
+      color: #333;
+    }
+
+    .popup-table td {
+      padding: 3px 0;
+      color: #111;
+    }
+
+    .popup-image {
+      width: 100% !important;
+      max-width: 260px !important;
+      max-height: 180px !important;
+      object-fit: contain;
+      border-radius: 6px;
+      margin-top: 8px;
+      border: 1px solid #ccc;
+      display: block;
+    }
+
+    .search-box {
+      background: white;
+      padding: 10px;
+      border-radius: 6px;
+      box-shadow: 0 0 8px rgba(0,0,0,0.3);
+      font-size: 13px;
+    }
+
+    .search-box input {
+      width: 160px;
+      padding: 6px;
+      border: 1px solid #999;
+      border-radius: 4px;
+      font-size: 13px;
+    }
+
+    .search-box button {
+      padding: 6px 8px;
+      margin-left: 4px;
+      border: 1px solid #777;
+      border-radius: 4px;
+      background: #f5f5f5;
+      cursor: pointer;
+    }
+
+    .search-message {
+      margin-top: 5px;
+      color: red;
+      font-size: 12px;
+    }
+  </style>
+</head>
+
+<body>
+
+  <div id="login">
+    <div class="login-card">
+      <h1>須賀利住宅地図</h1>
+      <p>パスワードを入力してください。</p>
+      <input id="passwordInput" type="password" placeholder="パスワード">
+      <button id="loginButton">地図を開く</button>
+      <div id="loginMessage"></div>
+    </div>
+  </div>
+
+  <div id="map"></div>
+
+  <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+
+  <script>
+    const STATUS_FIELD = 'sukari_house_status_状態';
+
+    const statusColors = {
+      '現在居住': '#FFD700',
+      '完全空き家': '#FFFF00',
+      '空き家で施設入居及び年に数回居住': '#ADFF2F',
+      '倉庫': '#00FF00',
+      '飲食店': '#FF00FF',
+      '商店': '#A020F0',
+      '加工場': '#00FFFF',
+      '行政関係': '#4169E1',
+      '現在居住(別荘)': '#D2B48C',
+      '神社・お寺': '#9370DB',
+      '撤去済み': '#FFFFFF',
+      '管理不完全空き家': '#808080',
+      '特定空き家': '#000000',
+      '不明': '#DDDDDD'
+    };
+
+    function getColor(status) {
+      const key = String(status || '').trim();
+      return statusColors[key] || '#3388FF';
+    }
+
+    function safeValue(value) {
+      if (value === null || value === undefined || value === '') {
+        return '';
+      }
+      return String(value);
+    }
+
+    function escapeHtml(value) {
+      return safeValue(value)
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#039;');
+    }
+
+    function base64ToBytes(base64) {
+      const binary = atob(base64);
+      const bytes = new Uint8Array(binary.length);
+
+      for (let i = 0; i < binary.length; i++) {
+        bytes[i] = binary.charCodeAt(i);
+      }
+
+      return bytes;
+    }
+
+    async function deriveKey(password, salt, iterations) {
+      const encoder = new TextEncoder();
+
+      const keyMaterial = await crypto.subtle.importKey(
+        'raw',
+        encoder.encode(password),
+        'PBKDF2',
+        false,
+        ['deriveKey']
+      );
+
+      return crypto.subtle.deriveKey(
+        {
+          name: 'PBKDF2',
+          salt: salt,
+          iterations: iterations,
+          hash: 'SHA-256'
+        },
+        keyMaterial,
+        {
+          name: 'AES-GCM',
+          length: 256
+        },
+        false,
+        ['decrypt']
+      );
+    }
+
+    async function loadEncryptedGeoJson(password) {
+      const response = await fetch('./houses.enc?v=' + Date.now(), {
+        cache: 'no-store'
+      });
+
+      if (!response.ok) {
+        throw new Error('暗号化ファイルを読み込めませんでした。');
+      }
+
+      const encrypted = await response.json();
+
+      const salt = base64ToBytes(encrypted.salt);
+      const iv = base64ToBytes(encrypted.iv);
+      const data = base64ToBytes(encrypted.data);
+
+      const key = await deriveKey(
+        password,
+        salt,
+        encrypted.iterations
+      );
+
+      const decrypted = await crypto.subtle.decrypt(
+        {
+          name: 'AES-GCM',
+          iv: iv
+        },
+        key,
+        data
+      );
+
+      const text = new TextDecoder().decode(decrypted);
+      return JSON.parse(text);
+    }
+
+    function convertGoogleDriveImageUrl(url) {
+      const imageUrl = safeValue(url);
+
+      if (imageUrl === '') {
+        return '';
+      }
+
+      if (imageUrl.includes('drive.google.com')) {
+        let fileId = '';
+
+        const matchFile = imageUrl.match(/\/file\/d\/([^/]+)/);
+        if (matchFile && matchFile[1]) {
+          fileId = matchFile[1];
+        }
+
+        const matchId = imageUrl.match(/[?&]id=([^&]+)/);
+        if (!fileId && matchId && matchId[1]) {
+          fileId = matchId[1];
+        }
+
+        if (fileId) {
+          return 'https://drive.google.com/thumbnail?id=' + fileId + '&sz=w800';
+        }
+      }
+
+      return imageUrl;
+    }
+
+    function getFirstValue(properties, fieldNames) {
+      for (const fieldName of fieldNames) {
+        const value = safeValue(properties[fieldName]);
+        if (value !== '') {
+          return value;
+        }
+      }
+      return '';
+    }
+
+    function createPopupContent(properties) {
+      const houseId = safeValue(properties['house_id']);
+
+      function addRow(label, value, alwaysDisplay = false) {
+        const displayValue = safeValue(value);
+
+        if (!alwaysDisplay && displayValue === '') {
+          return '';
+        }
+
+        return (
+          '<tr>' +
+            '<th>' + escapeHtml(label) + '</th>' +
+            '<td>' + escapeHtml(displayValue) + '</td>' +
+          '</tr>'
+        );
+      }
+
+      const imagePath1 = getFirstValue(properties, [
+        'sukari_house_status_image_path1',
+        'image_path1'
+      ]);
+
+      const displayImageUrl = convertGoogleDriveImageUrl(imagePath1);
+
+      let html = '';
+
+      html += '<div class="popup-title">';
+      html += '住宅情報';
+      if (houseId) {
+        html += '：' + escapeHtml(houseId);
+      }
+      html += '</div>';
+
+      html += '<table class="popup-table">';
+
+      html += addRow('house_id', properties['house_id'], true);
+      html += addRow('状態', properties[STATUS_FIELD], true);
+      html += addRow('番地', properties['sukari_house_status_地番'], true);
+      html += addRow('所有者氏名', properties['sukari_house_status_所有者　氏名'], true);
+      html += addRow('所有者連絡先', properties['sukari_house_status_所有者　連絡先'], true);
+
+      html += addRow('入居者名①', properties['sukari_house_status_入居者名①']);
+      html += addRow('入居者名②', properties['sukari_house_status_入居者名②']);
+      html += addRow('入居者名③', properties['sukari_house_status_入居者名③']);
+      html += addRow('入居者名④', properties['sukari_house_status_入居者名④']);
+
+      html += addRow('所属地区', properties['sukari_house_status_所属する地区']);
+      html += addRow('須賀利区への加入', properties['sukari_house_status_須賀利区への加入']);
+      html += addRow('維持管理状況', properties['sukari_house_status_維持管理状況']);
+      html += addRow('今後の建物維持管理について', properties['sukari_house_status_今後の建物維持管理について']);
+      html += addRow('メモ', properties['sukari_house_status_メモ']);
+
+      html += '</table>';
+
+      if (displayImageUrl !== '') {
+        html += '<img class="popup-image" src="' + escapeHtml(displayImageUrl) + '" alt="住宅画像">';
+      }
+
+      return html;
+    }
+
+    let map;
+    let housesLayer;
+    const houseIdIndex = {};
+
+    function initMap(data) {
+      document.getElementById('login').style.display = 'none';
+      document.getElementById('map').style.display = 'block';
+
+      map = L.map('map').setView([34.086, 136.232], 16);
+
+      L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        maxZoom: 20,
+        attribution: '&copy; OpenStreetMap contributors'
+      }).addTo(map);
+
+      housesLayer = L.geoJSON(data, {
+        style: function(feature) {
+          const properties = feature.properties || {};
+          const status = properties[STATUS_FIELD];
+          const color = getColor(status);
+
+          return {
+            color: color,
+            fillColor: color,
+            weight: 2,
+            fillOpacity: 0.65
+          };
+        },
+
+        onEachFeature: function(feature, layer) {
+          const properties = feature.properties || {};
+
+          layer.bindPopup(createPopupContent(properties), {
+            maxWidth: 300
+          });
+
+          const houseId = safeValue(properties['house_id']).trim();
+
+          if (houseId !== '') {
+            houseIdIndex[houseId] = layer;
+          }
+
+          layer.on('mouseover', function(e) {
+            e.target.setStyle({
+              weight: 4,
+              fillOpacity: 0.85
+            });
+
+            e.target.bringToFront();
+          });
+
+          layer.on('mouseout', function(e) {
+            housesLayer.resetStyle(e.target);
+          });
+        }
+      }).addTo(map);
+
+      map.fitBounds(housesLayer.getBounds());
+
+      addLegend();
+      addSearch();
+    }
+
+    function addLegend() {
+      const legend = L.control({ position: 'topright' });
+
+      legend.onAdd = function(map) {
+        const div = L.DomUtil.create('div', 'legend');
+
+        div.innerHTML += '<div class="legend-title">状態</div>';
+
+        const items = [
+          ['現在居住', '#FFD700'],
+          ['完全空き家', '#FFFF00'],
+          ['空き家で施設入居及び年に数回居住', '#ADFF2F'],
+          ['倉庫', '#00FF00'],
+          ['飲食店', '#FF00FF'],
+          ['商店', '#A020F0'],
+          ['加工場', '#00FFFF'],
+          ['行政関係', '#4169E1'],
+          ['現在居住(別荘)', '#D2B48C'],
+          ['神社・お寺', '#9370DB'],
+          ['撤去済み', '#FFFFFF'],
+          ['管理不完全空き家', '#808080'],
+          ['特定空き家', '#000000'],
+          ['不明', '#DDDDDD']
+        ];
+
+        items.forEach(function(item) {
+          div.innerHTML +=
+            '<div>' +
+            '<span class="legend-color" style="background:' + item[1] + '"></span>' +
+            item[0] +
+            '</div>';
+        });
+
+        return div;
+      };
+
+      legend.addTo(map);
+    }
+
+    function addSearch() {
+      const searchControl = L.control({ position: 'topleft' });
+
+      searchControl.onAdd = function(map) {
+        const div = L.DomUtil.create('div', 'search-box');
+
+        div.innerHTML =
+          '<div><b>house_id検索</b></div>' +
+          '<input id="houseSearchInput" type="text" placeholder="例：2-080-296">' +
+          '<button id="houseSearchButton">検索</button>' +
+          '<div id="houseSearchMessage" class="search-message"></div>';
+
+        L.DomEvent.disableClickPropagation(div);
+        L.DomEvent.disableScrollPropagation(div);
+
+        return div;
+      };
+
+      searchControl.addTo(map);
+    }
+
+    function searchHouseId() {
+      const input = document.getElementById('houseSearchInput');
+      const message = document.getElementById('houseSearchMessage');
+
+      const keyword = input.value.trim();
+      message.textContent = '';
+
+      if (keyword === '') {
+        message.textContent = 'house_idを入力してください';
+        return;
+      }
+
+      const targetLayer = houseIdIndex[keyword];
+
+      if (!targetLayer) {
+        message.textContent = '見つかりませんでした';
+        return;
+      }
+
+      if (targetLayer.getBounds) {
+        map.fitBounds(targetLayer.getBounds(), {
+          maxZoom: 20,
+          padding: [40, 40]
+        });
+      }
+
+      targetLayer.openPopup();
+
+      targetLayer.setStyle({
+        weight: 5,
+        fillOpacity: 0.95
+      });
+
+      targetLayer.bringToFront();
+
+      setTimeout(function() {
+        housesLayer.resetStyle(targetLayer);
+      }, 2000);
+    }
+
+    document.addEventListener('click', function(e) {
+      if (e.target && e.target.id === 'houseSearchButton') {
+        searchHouseId();
+      }
+    });
+
+    document.addEventListener('keydown', function(e) {
+      if (e.target && e.target.id === 'houseSearchInput' && e.key === 'Enter') {
+        searchHouseId();
+      }
+    });
+
+    async function handleLogin() {
+      const password = document.getElementById('passwordInput').value;
+      const message = document.getElementById('loginMessage');
+
+      message.textContent = '';
+
+      if (!password) {
+        message.textContent = 'パスワードを入力してください。';
+        return;
+      }
+
+      try {
+        message.textContent = '読み込み中です...';
+
+        const data = await loadEncryptedGeoJson(password);
+
+        message.textContent = '';
+        initMap(data);
+
+      } catch (error) {
+        console.error(error);
+        message.textContent = 'パスワードが違うか、データを読み込めませんでした。';
+      }
+    }
+
+    document.getElementById('loginButton').addEventListener('click', handleLogin);
+
+    document.getElementById('passwordInput').addEventListener('keydown', function(e) {
+      if (e.key === 'Enter') {
+        handleLogin();
+      }
+    });
+  </script>
+</body>
+</html>
